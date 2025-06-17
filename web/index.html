@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Movie Recommender</title>
+    <!-- Use the correct ONNX Runtime Web CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .loading {
+            text-align: center;
+            color: #666;
+        }
+        .error {
+            color: red;
+            background: #ffebee;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .success {
+            color: green;
+            background: #e8f5e8;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        input, button {
+            padding: 10px;
+            margin: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .recommendations {
+            margin-top: 20px;
+        }
+        .movie-item {
+            background: white;
+            padding: 15px;
+            margin: 8px 0;
+            border-radius: 4px;
+            border-left: 4px solid #007bff;
+        }
+        .movie-title {
+            font-size: 16px;
+            font-weight: bold;
+            color: #333;
+        }
+        .movie-id {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+        }
+        .movie-score {
+            font-size: 12px;
+            color: #888;
+            margin-top: 2px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Movie Recommender</h1>
+    
+    <div class="container">
+        <h3>Model Status</h3>
+        <div id="modelStatus" class="loading">Loading model...</div>
+    </div>
+
+    <div class="container">
+        <h3>Get Recommendations</h3>
+        <p>Enter movie IDs (comma-separated) from your viewing history:</p>
+        <input type="text" id="movieInput" placeholder="e.g., 1,2,3,4,5" style="width: 300px;">
+        <button id="predictBtn" onclick="predict()" disabled>Get Recommendations</button>
+        
+        <div id="recommendations" class="recommendations"></div>
+    </div>
+
+    <div class="container">
+        <h3>Debug Info</h3>
+        <div id="debugInfo"></div>
+    </div>
+
+    <script>
+        let session = null;
+        let metadata = null;
+        let movieIdToName = null;
+        
+        // Wait for ONNX Runtime to load
+        function waitForOrt() {
+            return new Promise((resolve, reject) => {
+                if (typeof ort !== 'undefined') {
+                    resolve();
+                    return;
+                }
+                
+                let attempts = 0;
+                const maxAttempts = 50; // 5 seconds max
+                
+                const checkOrt = () => {
+                    attempts++;
+                    if (typeof ort !== 'undefined') {
+                        resolve();
+                    } else if (attempts >= maxAttempts) {
+                        reject(new Error('ONNX Runtime failed to load'));
+                    } else {
+                        setTimeout(checkOrt, 100);
+                    }
+                };
+                
+                checkOrt();
+            });
+        }
+        
+        // Initialize the application
+        async function init() {
+            try {
+                updateStatus('Loading ONNX Runtime...', 'loading');
+                
+                // Wait for ONNX Runtime to be available
+                await waitForOrt();
+                
+                updateStatus('Loading model metadata...', 'loading');
+                
+                // Load metadata
+                const metadataResponse = await fetch('models/metadata.json');
+                if (!metadataResponse.ok) {
+                    throw new Error(`Failed to load metadata: ${metadataResponse.status} ${metadataResponse.statusText}`);
+                }
+                metadata = await metadataResponse.json();
+                
+                updateStatus('Loading movie names...', 'loading');
+                
+                // Load movie ID to name mapping
+                const movieNamesResponse = await fetch('models/movie_id_to_name.json');
+                if (!movieNamesResponse.ok) {
+                    throw new Error(`Failed to load movie names: ${movieNamesResponse.status} ${movieNamesResponse.statusText}`);
+                }
+                const movieNamesData = await movieNamesResponse.json();
+                movieIdToName = movieNamesData.data;
+                
+                updateStatus('Loading ONNX model...', 'loading');
+                
+                // Load ONNX model with error handling
+                try {
+                    session = await ort.InferenceSession.create('models/sasrec_model.onnx', {
+                        executionProviders: ['wasm']
+                    });
+                } catch (modelError) {
+                    console.error('Model loading error:', modelError);
+                    throw new Error(`Failed to load ONNX model: ${modelError.message}`);
+                }
+                
+                updateStatus('Model loaded successfully!', 'success');
+                document.getElementById('predictBtn').disabled = false;
+                
+                // Display model info
+                displayDebugInfo();
+                
+            } catch (error) {
+                console.error('Error loading model:', error);
+                updateStatus(`Error loading model: ${error.message}`, 'error');
+            }
+        }
+        
+        function updateStatus(message, type) {
+            const statusDiv = document.getElementById('modelStatus');
+            statusDiv.textContent = message;
+            statusDiv.className = type;
+        }
+        
+        function displayDebugInfo() {
+            const debugDiv = document.getElementById('debugInfo');
+            const movieCount = movieIdToName ? Object.keys(movieIdToName).length : 0;
+            debugDiv.innerHTML = `
+                <p><strong>Model Info:</strong></p>
+                <ul>
+                    <li>Max sequence length: ${metadata.model_params.max_len}</li>
+                    <li>Number of movies: ${metadata.num_movies}</li>
+                    <li>Embedding dimension: ${metadata.model_params.embed_dim}</li>
+                    <li>Input shape: [${metadata.input_shape.join(', ')}]</li>
+                    <li>Output shape: [${metadata.output_shape.join(', ')}]</li>
+                    <li>Movie names loaded: ${movieCount} movies</li>
+                    <li>ONNX Runtime loaded: ${typeof ort !== 'undefined' ? 'Yes' : 'No'}</li>
+                </ul>
+            `;
+        }
+        
+        function getMovieName(movieId) {
+            return movieIdToName && movieIdToName[movieId.toString()] 
+                ? movieIdToName[movieId.toString()] 
+                : `Unknown Movie (ID: ${movieId})`;
+        }
+        
+        async function predict() {
+            if (!session || !metadata) {
+                alert('Model not loaded yet!');
+                return;
+            }
+            
+            const movieInput = document.getElementById('movieInput').value.trim();
+            if (!movieInput) {
+                alert('Please enter movie IDs');
+                return;
+            }
+            
+            try {
+                // Parse input
+                const movieIds = movieInput.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+                
+                if (movieIds.length === 0) {
+                    alert('Please enter valid movie IDs');
+                    return;
+                }
+                
+                // Prepare input sequence with LEFT-PADDING like Python
+                const maxLen = metadata.model_params.max_len;
+                const inputSequence = new Array(maxLen).fill(0);
+                
+                // Left-pad: put movies at the END of the sequence
+                const startIndex = Math.max(0, maxLen - movieIds.length);
+                for (let i = 0; i < Math.min(movieIds.length, maxLen); i++) {
+                    inputSequence[startIndex + i] = movieIds[i];
+                }
+                
+                console.log('Input sequence:', inputSequence);
+                console.log('Input movies:', movieIds.map(id => `${id}: ${getMovieName(id)}`));
+                
+                // Create tensor - use regular Int32Array instead of BigInt64Array
+                const inputTensor = new ort.Tensor('int64', new BigInt64Array(inputSequence.map(x => BigInt(x))), [1, maxLen]);
+                
+                console.log('Input tensor created:', inputTensor);
+                
+                // Run inference
+                document.getElementById('predictBtn').disabled = true;
+                document.getElementById('predictBtn').textContent = 'Predicting...';
+                
+                const results = await session.run({ input_sequence: inputTensor });
+                const outputData = results.output_logits.data;
+                
+                console.log('Prediction completed, output shape:', results.output_logits.dims);
+                
+                // Get top recommendations
+                const recommendations = getTopRecommendations(outputData, movieIds, 10);
+                displayRecommendations(recommendations);
+                
+            } catch (error) {
+                console.error('Prediction error:', error);
+                alert(`Prediction error: ${error.message}`);
+            } finally {
+                document.getElementById('predictBtn').disabled = false;
+                document.getElementById('predictBtn').textContent = 'Get Recommendations';
+            }
+        }
+        
+        function getTopRecommendations(outputData, watchedMovies, topK) {
+            // Convert to regular array and get movie scores
+            const scores = Array.from(outputData);
+            const watchedSet = new Set(watchedMovies);
+            
+            console.log('Output scores length:', scores.length);
+            console.log('Watched movies:', watchedMovies);
+            
+            // Create (movieId, score) pairs, excluding watched movies and movie ID 0 (padding)
+            const movieScores = [];
+            for (let i = 1; i < scores.length; i++) {
+                if (!watchedSet.has(i)) {
+                    movieScores.push({ movieId: i, score: scores[i] });
+                }
+            }
+            
+            // Sort by score descending and take top K
+            movieScores.sort((a, b) => b.score - a.score);
+            
+            console.log('Top 5 scores:', movieScores.slice(0, 5));
+            
+            return movieScores.slice(0, topK);
+        }
+        
+        function displayRecommendations(recommendations) {
+            const recDiv = document.getElementById('recommendations');
+            
+            if (recommendations.length === 0) {
+                recDiv.innerHTML = '<p>No recommendations found.</p>';
+                return;
+            }
+            
+            let html = '<h4>Top Recommendations:</h4>';
+            recommendations.forEach((rec, index) => {
+                const movieName = getMovieName(rec.movieId);
+                html += `
+                    <div class="movie-item">
+                        <div class="movie-title">#${index + 1} - ${movieName}</div>
+                        <div class="movie-id">Movie ID: ${rec.movieId}</div>
+                        <div class="movie-score">Confidence Score: ${rec.score.toFixed(4)}</div>
+                    </div>
+                `;
+            });
+            
+            recDiv.innerHTML = html;
+        }
+        
+        // Start initialization when page loads
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>

@@ -284,6 +284,8 @@ class MovieRecommender:
             print("Warning: No valid movies found in history")
             return []
         
+        print(mapped_history)
+        
         # Prepare input sequence
         input_sequence = self.prepare_sequence(mapped_history)
         

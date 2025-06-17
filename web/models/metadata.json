@@ -1,0 +1,22 @@
+{
+  "model_params": {
+    "num_movies": 30401,
+    "embed_dim": 128,
+    "num_heads": 8,
+    "num_layers": 2,
+    "max_len": 50
+  },
+  "num_users": 66244,
+  "num_movies": 30401,
+  "input_shape": [
+    1,
+    50
+  ],
+  "input_dtype": "int64",
+  "output_shape": [
+    1,
+    30402
+  ],
+  "output_dtype": "float32",
+  "description": "SASRec model for movie recommendation"
+}
